@@ -1,0 +1,21 @@
+package com.example.cmslearnenglish.dto;
+
+import com.fasterxml.jackson.annotation.JsonAutoDetect;
+import lombok.AllArgsConstructor;
+import lombok.Getter;
+import lombok.NoArgsConstructor;
+import lombok.Setter;
+import lombok.experimental.Accessors;
+
+@Getter
+@Setter
+@NoArgsConstructor
+@AllArgsConstructor
+@Accessors(fluent = true)
+@JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
+public class VocabularyQuizOptionResponse {
+    private Long id;
+    private String word;
+    private String vietnameseTranslation;
+    private String englishDefinition;
+}
