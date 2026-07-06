@@ -4,6 +4,7 @@ import com.example.cmslearnenglish.dto.AdminVocabularyDtos.*;
 import com.example.cmslearnenglish.exception.ResourceNotFoundException;
 import lombok.RequiredArgsConstructor;
 import org.springframework.dao.DuplicateKeyException;
+import org.springframework.web.multipart.MultipartFile;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.PageRequest;
@@ -11,10 +12,20 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
+import java.net.URLEncoder;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.text.Normalizer;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.Locale;
 
 @Service
@@ -232,6 +243,281 @@ public class AdminVocabularyService {
         jdbcTemplate.update("DELETE FROM vocabulary_word WHERE id=?", id);
     }
 
+
+    @Transactional
+    public ImportResult importCsv(MultipartFile file) {
+        if (file == null || file.isEmpty()) {
+            throw new IllegalArgumentException("CSV file is required");
+        }
+
+        ImportCounter counter = new ImportCounter();
+        Map<String, Long> deckIds = new HashMap<>();
+        Map<String, Long> topicIds = new HashMap<>();
+        Set<String> touchedDecks = new HashSet<>();
+        Set<String> touchedTopics = new HashSet<>();
+
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(file.getInputStream(), StandardCharsets.UTF_8))) {
+            String headerLine = reader.readLine();
+            if (headerLine == null) {
+                throw new IllegalArgumentException("CSV file is empty");
+            }
+
+            Map<String, Integer> headers = headerMap(parseCsvLine(stripBom(headerLine)));
+            String line;
+            while ((line = reader.readLine()) != null) {
+                if (line.isBlank()) {
+                    continue;
+                }
+                counter.rows++;
+                List<String> row = parseCsvLine(line);
+                CsvVocabularyRow csv = toVocabularyRow(headers, row);
+                if (!csv.isValid()) {
+                    counter.skippedRows++;
+                    continue;
+                }
+
+                String deckSlug = slugify(csv.deckTitle());
+                Long deckId = deckIds.get(deckSlug);
+                if (deckId == null) {
+                    deckId = findDeckId(deckSlug);
+                    if (deckId == null) {
+                        deckId = createImportedDeck(deckSlug, csv.deckTitle());
+                        counter.decksCreated++;
+                    } else if (touchedDecks.add(deckSlug)) {
+                        updateImportedDeck(deckId, csv.deckTitle());
+                        counter.decksUpdated++;
+                    }
+                    deckIds.put(deckSlug, deckId);
+                }
+
+                String topicSlug = slugify(csv.topicTitle());
+                String topicKey = deckId + ":" + topicSlug;
+                Long topicId = topicIds.get(topicKey);
+                if (topicId == null) {
+                    topicId = findTopicId(deckId, topicSlug);
+                    if (topicId == null) {
+                        topicId = createImportedTopic(deckId, topicSlug, csv.topicTitle());
+                        counter.topicsCreated++;
+                    } else if (touchedTopics.add(topicKey)) {
+                        updateImportedTopic(topicId, csv.topicTitle());
+                        counter.topicsUpdated++;
+                    }
+                    topicIds.put(topicKey, topicId);
+                }
+
+                if (upsertImportedWord(topicId, csv)) {
+                    counter.wordsCreated++;
+                } else {
+                    counter.wordsUpdated++;
+                }
+            }
+        } catch (IOException ex) {
+            throw new IllegalArgumentException("Unable to read CSV file", ex);
+        }
+
+        return counter.toResult();
+    }
+
+    private CsvVocabularyRow toVocabularyRow(Map<String, Integer> headers, List<String> row) {
+        return new CsvVocabularyRow(
+                value(headers, row, "tu tieng anh", "word"),
+                value(headers, row, "loai tu", "partOfSpeech"),
+                value(headers, row, "nghia tieng viet", "vietnameseTranslation"),
+                value(headers, row, "dinh nghia tieng anh", "englishDefinition"),
+                value(headers, row, "dinh nghia tieng viet", "vietnameseDefinition"),
+                value(headers, row, "vi du tieng anh", "exampleSentence"),
+                value(headers, row, "vi du tieng viet", "exampleSentenceVi"),
+                value(headers, row, "phat am us", "ipaUs"),
+                value(headers, row, "phat am uk", "ipaUk"),
+                value(headers, row, "chu de", "topic"),
+                value(headers, row, "bo de", "deck"),
+                value(headers, row, "link anh", "imageUrl", "image_url")
+        );
+    }
+
+    private Long createImportedDeck(String slug, String title) {
+        Integer sortOrder = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM vocabulary_deck", Integer.class);
+        return jdbcTemplate.queryForObject("""
+                INSERT INTO vocabulary_deck (slug, title, category, description, cover_color, status, is_premium, learner_count, sort_order)
+                VALUES (?, ?, ?, ?, ?, 'PUBLISHED', FALSE, 0, ?) RETURNING id
+                """, Long.class, slug, title, "Oxford Vocabulary", "Imported from CSV", "#2f356d", sortOrder == null ? 0 : sortOrder);
+    }
+
+    private void updateImportedDeck(Long id, String title) {
+        jdbcTemplate.update("UPDATE vocabulary_deck SET title=?, updated_at=NOW() WHERE id=?", title, id);
+    }
+
+    private Long createImportedTopic(Long deckId, String slug, String title) {
+        Integer sortOrder = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM vocabulary_topic WHERE deck_id=?", Integer.class, deckId);
+        return jdbcTemplate.queryForObject("""
+                INSERT INTO vocabulary_topic (deck_id, slug, title, description, thumbnail_url, sort_order)
+                VALUES (?, ?, ?, ?, NULL, ?) RETURNING id
+                """, Long.class, deckId, slug, title, "Imported from CSV", sortOrder == null ? 0 : sortOrder);
+    }
+
+    private void updateImportedTopic(Long id, String title) {
+        jdbcTemplate.update("UPDATE vocabulary_topic SET title=?, updated_at=NOW() WHERE id=?", title, id);
+    }
+
+    private boolean upsertImportedWord(Long topicId, CsvVocabularyRow csv) {
+        Long wordId = findWordId(topicId, csv.word());
+        String imageUrl = importedImageUrl(csv);
+        if (wordId == null) {
+            Integer sortOrder = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM vocabulary_word WHERE topic_id=?", Integer.class, topicId);
+            jdbcTemplate.update("""
+                    INSERT INTO vocabulary_word (topic_id, word, part_of_speech, ipa_us, ipa_uk, audio_us_url, audio_uk_url,
+                        english_definition, vietnamese_definition, vietnamese_translation, example_sentence, example_sentence_vi, image_url, sort_order)
+                    VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?, ?, ?, ?, ?, ?)
+                    """, topicId, truncate(csv.word(), 160), truncate(csv.partOfSpeech(), 80), truncate(csv.ipaUs(), 120),
+                    truncate(csv.ipaUk(), 120), csv.englishDefinition(), csv.vietnameseDefinition(), truncate(csv.vietnameseTranslation(), 255),
+                    trim(csv.exampleSentence()), trim(csv.exampleSentenceVi()), imageUrl, sortOrder == null ? 0 : sortOrder);
+            return true;
+        }
+
+        jdbcTemplate.update("""
+                UPDATE vocabulary_word SET part_of_speech=?, ipa_us=?, ipa_uk=?, english_definition=?, vietnamese_definition=?,
+                    vietnamese_translation=?, example_sentence=?, example_sentence_vi=?, image_url=?, updated_at=NOW() WHERE id=?
+                """, truncate(csv.partOfSpeech(), 80), truncate(csv.ipaUs(), 120), truncate(csv.ipaUk(), 120), csv.englishDefinition(),
+                csv.vietnameseDefinition(), truncate(csv.vietnameseTranslation(), 255), trim(csv.exampleSentence()), trim(csv.exampleSentenceVi()), imageUrl, wordId);
+        return false;
+    }
+
+    private String importedImageUrl(CsvVocabularyRow csv) {
+        String imageUrl = trim(csv.imageUrl());
+        if (imageUrl != null) {
+            return imageUrl;
+        }
+        return "https://placehold.co/240x180/bfefff/2f356d?text="
+                + URLEncoder.encode(csv.word(), StandardCharsets.UTF_8);
+    }
+    private Long findDeckId(String slug) {
+        return findLong("SELECT id FROM vocabulary_deck WHERE slug=?", slug);
+    }
+
+    private Long findTopicId(Long deckId, String slug) {
+        return findLong("SELECT id FROM vocabulary_topic WHERE deck_id=? AND slug=?", deckId, slug);
+    }
+
+    private Long findWordId(Long topicId, String word) {
+        return findLong("SELECT id FROM vocabulary_word WHERE topic_id=? AND LOWER(word)=LOWER(?)", topicId, word);
+    }
+
+    private Long findLong(String sql, Object... args) {
+        List<Long> rows = jdbcTemplate.query(sql, (rs, row) -> rs.getLong(1), args);
+        return rows.isEmpty() ? null : rows.getFirst();
+    }
+
+    private Map<String, Integer> headerMap(List<String> headers) {
+        Map<String, Integer> map = new HashMap<>();
+        for (int i = 0; i < headers.size(); i++) {
+            map.put(normalizeHeader(headers.get(i)), i);
+        }
+        return map;
+    }
+
+    private String value(Map<String, Integer> headers, List<String> row, String... aliases) {
+        for (String alias : aliases) {
+            Integer index = headers.get(normalizeHeader(alias));
+            if (index != null && index < row.size()) {
+                return trim(row.get(index));
+            }
+        }
+        return null;
+    }
+
+    private List<String> parseCsvLine(String line) {
+        List<String> values = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean quoted = false;
+        for (int i = 0; i < line.length(); i++) {
+            char ch = line.charAt(i);
+            if (ch == '"') {
+                if (quoted && i + 1 < line.length() && line.charAt(i + 1) == '"') {
+                    current.append('"');
+                    i++;
+                } else {
+                    quoted = !quoted;
+                }
+            } else if (ch == ',' && !quoted) {
+                values.add(current.toString().trim());
+                current.setLength(0);
+            } else {
+                current.append(ch);
+            }
+        }
+        values.add(current.toString().trim());
+        return values;
+    }
+
+    private String stripBom(String value) {
+        return value != null && !value.isEmpty() && value.charAt(0) == '\uFEFF' ? value.substring(1) : value;
+    }
+
+    private String normalizeHeader(String value) {
+        String normalizedValue = stripBom(value == null ? "" : value)
+                .trim()
+                .toLowerCase(Locale.ROOT)
+                .replace('\u0111', 'd')
+                .replace('\u00f0', 'd');
+        return Normalizer.normalize(normalizedValue, Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "");
+    }
+
+    private String slugify(String value) {
+        String normalized = Normalizer.normalize((value == null ? "" : value).replace('\u0111', 'd').replace('\u00f0', 'd'), Normalizer.Form.NFD)
+                .replaceAll("\\p{M}", "")
+                .toLowerCase(Locale.ROOT)
+                .replaceAll("[^a-z0-9]+", "-")
+                .replaceAll("^-|-$", "");
+        if (normalized.isBlank()) {
+            normalized = "imported-item";
+        }
+        return truncate(normalized, 120);
+    }
+
+    private String truncate(String value, int maxLength) {
+        String trimmed = trim(value);
+        if (trimmed == null || trimmed.length() <= maxLength) {
+            return trimmed;
+        }
+        return trimmed.substring(0, maxLength);
+    }
+
+    private record CsvVocabularyRow(
+            String word,
+            String partOfSpeech,
+            String vietnameseTranslation,
+            String englishDefinition,
+            String vietnameseDefinition,
+            String exampleSentence,
+            String exampleSentenceVi,
+            String ipaUs,
+            String ipaUk,
+            String topicTitle,
+            String deckTitle,
+            String imageUrl
+    ) {
+        boolean isValid() {
+            return word != null && partOfSpeech != null && vietnameseTranslation != null
+                    && englishDefinition != null && vietnameseDefinition != null
+                    && topicTitle != null && deckTitle != null;
+        }
+    }
+
+    private static class ImportCounter {
+        int rows;
+        int decksCreated;
+        int decksUpdated;
+        int topicsCreated;
+        int topicsUpdated;
+        int wordsCreated;
+        int wordsUpdated;
+        int skippedRows;
+
+        ImportResult toResult() {
+            return new ImportResult(rows, decksCreated, decksUpdated, topicsCreated, topicsUpdated, wordsCreated, wordsUpdated, skippedRows);
+        }
+    }
     private Object[] wordArgs(WordRequest r) {
         return new Object[]{r.topicId(), clean(r.word()), clean(r.partOfSpeech()), trim(r.ipaUs()), trim(r.ipaUk()),
                 trim(r.audioUsUrl()), trim(r.audioUkUrl()), clean(r.englishDefinition()), clean(r.vietnameseDefinition()),
@@ -309,3 +595,5 @@ public class AdminVocabularyService {
                 rs.getObject("created_at", java.time.OffsetDateTime.class), rs.getObject("updated_at", java.time.OffsetDateTime.class));
     }
 }
+
+

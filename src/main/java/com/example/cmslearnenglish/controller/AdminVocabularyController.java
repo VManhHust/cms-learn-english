@@ -5,8 +5,10 @@ import com.example.cmslearnenglish.service.AdminVocabularyService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 @RestController
 @RequestMapping("/api/admin/vocabulary")
@@ -18,6 +20,11 @@ public class AdminVocabularyController {
     @GetMapping("/summary")
     public Summary summary() { return service.getSummary(); }
 
+
+    @PostMapping(value = "/import", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ImportResult importCsv(@RequestParam("file") MultipartFile file) {
+        return service.importCsv(file);
+    }
     @GetMapping("/decks")
     public Page<DeckResponse> decks(@RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="25") int size,
             @RequestParam(defaultValue="id") String sort, @RequestParam(defaultValue="DESC") String order,
@@ -52,3 +59,4 @@ public class AdminVocabularyController {
     @PutMapping("/words/{id}") public WordResponse updateWord(@PathVariable Long id, @Valid @RequestBody WordRequest body) { return service.updateWord(id, body); }
     @DeleteMapping("/words/{id}") public ResponseEntity<Void> deleteWord(@PathVariable Long id) { service.deleteWord(id); return ResponseEntity.noContent().build(); }
 }
+

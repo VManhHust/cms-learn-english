@@ -110,6 +110,23 @@ public final class AdminVocabularyDtos {
     @AllArgsConstructor
     @Accessors(fluent = true)
     @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
+    public static class ImportResult {
+        private int rows;
+        private int decksCreated;
+        private int decksUpdated;
+        private int topicsCreated;
+        private int topicsUpdated;
+        private int wordsCreated;
+        private int wordsUpdated;
+        private int skippedRows;
+    }
+
+    @Getter
+    @Setter
+    @NoArgsConstructor
+    @AllArgsConstructor
+    @Accessors(fluent = true)
+    @JsonAutoDetect(fieldVisibility = JsonAutoDetect.Visibility.ANY)
     public static class DeckRequest {
         @NotBlank @Size(max = 120) @Pattern(regexp = "^[a-z0-9]+(?:-[a-z0-9]+)*$", message = "slug must use lowercase letters, numbers and hyphens")
         private String slug;
@@ -180,3 +197,6 @@ public final class AdminVocabularyDtos {
         private int sortOrder;
     }
 }
+
+
+
