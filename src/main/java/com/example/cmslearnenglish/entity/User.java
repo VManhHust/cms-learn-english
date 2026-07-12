@@ -1,8 +1,10 @@
 package com.example.cmslearnenglish.entity;
 
 import com.example.cmslearnenglish.entity.enums.Role;
+import com.example.cmslearnenglish.entity.enums.UserStatus;
 import jakarta.persistence.*;
 import lombok.*;
+import org.hibernate.annotations.Formula;
 
 import java.time.Instant;
 
@@ -44,4 +46,12 @@ public class User {
 
     @Column
     private Instant proExpiresAt;
+
+    @Enumerated(EnumType.STRING)
+    @Column(nullable = false, length = 20)
+    @Builder.Default
+    private UserStatus status = UserStatus.ACTIVE;
+
+    @Formula("case when status = 'DELETE' then 1 else 0 end")
+    private int statusOrder;
 }

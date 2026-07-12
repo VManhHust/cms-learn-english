@@ -1,6 +1,7 @@
 package com.example.cmslearnenglish.controller;
 
 import com.example.cmslearnenglish.dto.AdminTopicRequest;
+import com.example.cmslearnenglish.dto.AdminUserCreateRequest;
 import com.example.cmslearnenglish.dto.AdminUserUpdateRequest;
 import com.example.cmslearnenglish.dto.LearningExerciseDto;
 import com.example.cmslearnenglish.dto.UserDto;
@@ -85,8 +86,12 @@ public class AdminCmsController {
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "createdAt") String sort,
             @RequestParam(defaultValue = "DESC") String order,
-            @RequestParam(required = false) String q) {
-        return adminCmsService.getUsers(page, size, sort, order, q);
+            @RequestParam(required = false) String q,
+            @RequestParam(required = false) String displayName,
+            @RequestParam(required = false) String role,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) String pro) {
+        return adminCmsService.getUsers(page, size, sort, order, q, displayName, role, status, pro);
     }
 
     @GetMapping("/users/{id}")
@@ -94,11 +99,22 @@ public class AdminCmsController {
         return adminCmsService.getUser(id);
     }
 
+    @PostMapping("/users")
+    public UserDto createUser(@Valid @RequestBody AdminUserCreateRequest request) {
+        return adminCmsService.createUser(request);
+    }
+
     @PutMapping("/users/{id}")
     public UserDto updateUser(
             @PathVariable Long id,
             @RequestBody AdminUserUpdateRequest request) {
         return adminCmsService.updateUser(id, request);
+    }
+
+    @DeleteMapping("/users/{id}")
+    public ResponseEntity<Void> deleteUser(@PathVariable Long id) {
+        adminCmsService.deleteUser(id);
+        return ResponseEntity.noContent().build();
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

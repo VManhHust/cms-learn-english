@@ -1,6 +1,8 @@
 package com.example.cmslearnenglish.security;
 
 import com.example.cmslearnenglish.dto.ErrorResponse;
+import com.example.cmslearnenglish.entity.enums.UserStatus;
+import com.example.cmslearnenglish.repository.UserRepository;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
@@ -34,10 +36,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
     private final JwtProvider jwtProvider;
     private final ObjectMapper objectMapper;
+    private final UserRepository userRepository;
 
-    public JwtAuthFilter(JwtProvider jwtProvider, ObjectMapper objectMapper) {
+    public JwtAuthFilter(JwtProvider jwtProvider, ObjectMapper objectMapper, UserRepository userRepository) {
         this.jwtProvider = jwtProvider;
         this.objectMapper = objectMapper;
+        this.userRepository = userRepository;
     }
 
     @Override
@@ -60,6 +64,12 @@ public class JwtAuthFilter extends OncePerRequestFilter {
 
         try {
             JwtClaims claims = jwtProvider.validateToken(token);
+            boolean active = userRepository.findById(claims.getUserId())
+                    .map(user -> user.getStatus() == UserStatus.ACTIVE)
+                    .orElse(false);
+            if (!active) {
+                throw new JwtException("Account inactive");
+            }
             var auth = new UsernamePasswordAuthenticationToken(
                     claims,
                     null,

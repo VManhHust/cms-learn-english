@@ -17,4 +17,5 @@ public class UserDto {
     private boolean pro;
     private Instant proStartsAt;
     private Instant proExpiresAt;
+    private String status;
 }
