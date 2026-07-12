@@ -360,7 +360,7 @@ public class AdminVocabularyService {
     }
 
     private boolean upsertImportedWord(Long topicId, CsvVocabularyRow csv) {
-        Long wordId = findWordId(topicId, csv.word());
+        Long wordId = findWordId(csv.word());
         String imageUrl = importedImageUrl(csv);
         if (wordId == null) {
             Integer sortOrder = jdbcTemplate.queryForObject("SELECT COALESCE(MAX(sort_order), 0) + 1 FROM vocabulary_word WHERE topic_id=?", Integer.class, topicId);
@@ -375,9 +375,9 @@ public class AdminVocabularyService {
         }
 
         jdbcTemplate.update("""
-                UPDATE vocabulary_word SET part_of_speech=?, ipa_us=?, ipa_uk=?, english_definition=?, vietnamese_definition=?,
+                UPDATE vocabulary_word SET topic_id=?, part_of_speech=?, ipa_us=?, ipa_uk=?, english_definition=?, vietnamese_definition=?,
                     vietnamese_translation=?, example_sentence=?, example_sentence_vi=?, image_url=?, updated_at=NOW() WHERE id=?
-                """, truncate(csv.partOfSpeech(), 80), truncate(csv.ipaUs(), 120), truncate(csv.ipaUk(), 120), csv.englishDefinition(),
+                """, topicId, truncate(csv.partOfSpeech(), 80), truncate(csv.ipaUs(), 120), truncate(csv.ipaUk(), 120), csv.englishDefinition(),
                 csv.vietnameseDefinition(), truncate(csv.vietnameseTranslation(), 255), trim(csv.exampleSentence()), trim(csv.exampleSentenceVi()), imageUrl, wordId);
         return false;
     }
@@ -398,8 +398,8 @@ public class AdminVocabularyService {
         return findLong("SELECT id FROM vocabulary_topic WHERE deck_id=? AND slug=?", deckId, slug);
     }
 
-    private Long findWordId(Long topicId, String word) {
-        return findLong("SELECT id FROM vocabulary_word WHERE topic_id=? AND LOWER(word)=LOWER(?)", topicId, word);
+    private Long findWordId(String word) {
+        return findLong("SELECT id FROM vocabulary_word WHERE LOWER(word)=LOWER(?)", word);
     }
 
     private Long findLong(String sql, Object... args) {
