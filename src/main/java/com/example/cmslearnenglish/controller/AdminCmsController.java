@@ -38,8 +38,9 @@ public class AdminCmsController {
             @RequestParam(defaultValue = "0") int page,
             @RequestParam(defaultValue = "25") int size,
             @RequestParam(defaultValue = "id") String sort,
-            @RequestParam(defaultValue = "DESC") String order) {
-        return adminCmsService.getTopics(page, size, sort, order);
+            @RequestParam(defaultValue = "DESC") String order,
+            @RequestParam(required = false) String q) {
+        return adminCmsService.getTopics(page, size, sort, order, q);
     }
 
     @GetMapping("/topics/{id}")

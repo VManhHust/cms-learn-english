@@ -53,9 +53,13 @@ public class AdminCmsService {
     }
 
     @Transactional(readOnly = true)
-    public Page<AdminTopicDto> getTopics(int page, int size, String sort, String order) {
+    public Page<AdminTopicDto> getTopics(int page, int size, String sort, String order, String query) {
         Pageable pageable = PageRequest.of(page, size, toSort(sort, order, "id"));
-        return topicRepository.findAll(pageable).map(this::toTopicDto);
+        Page<LearningTopic> topics = query == null || query.isBlank()
+                ? topicRepository.findAll(pageable)
+                : topicRepository.findByTopicNameContainingIgnoreCaseOrDescriptionContainingIgnoreCase(
+                        query.trim(), query.trim(), pageable);
+        return topics.map(this::toTopicDto);
     }
 
     @Transactional(readOnly = true)

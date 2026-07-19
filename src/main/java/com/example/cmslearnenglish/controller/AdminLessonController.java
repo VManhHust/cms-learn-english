@@ -3,6 +3,7 @@ package com.example.cmslearnenglish.controller;
 import com.example.cmslearnenglish.dto.*;
 import com.example.cmslearnenglish.service.AdminLessonService;
 import com.example.cmslearnenglish.service.AdminTranscriptService;
+import com.example.cmslearnenglish.service.AdminTranscriptImportService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
@@ -17,6 +18,7 @@ public class AdminLessonController {
 
     private final AdminLessonService adminLessonService;
     private final AdminTranscriptService adminTranscriptService;
+    private final AdminTranscriptImportService adminTranscriptImportService;
 
     /**
      * Import single lesson from YouTube
@@ -28,6 +30,12 @@ public class AdminLessonController {
         LearningExerciseDto lesson = adminLessonService.importLesson(
                 request.getTopicId(), request.getYoutubeUrl(), request.getTitle(),
                 request.getLevel(), request.getChannelYoutubeId());
+        return ResponseEntity.status(HttpStatus.CREATED).body(lesson);
+    }
+
+    @PostMapping("/import-transcript")
+    public ResponseEntity<LearningExerciseDto> importTranscript(@RequestBody @jakarta.validation.Valid ImportTranscriptRequest request) {
+        LearningExerciseDto lesson = adminTranscriptImportService.importByVideoId(request.getVideoId());
         return ResponseEntity.status(HttpStatus.CREATED).body(lesson);
     }
 
@@ -92,5 +100,10 @@ public class AdminLessonController {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<String> handleBadRequest(IllegalArgumentException e) {
         return ResponseEntity.badRequest().body(e.getMessage());
+    }
+
+    @ExceptionHandler(IllegalStateException.class)
+    public ResponseEntity<String> handleImportFailure(IllegalStateException e) {
+        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(e.getMessage());
     }
 }
