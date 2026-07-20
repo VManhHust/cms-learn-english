@@ -5,7 +5,6 @@ import com.example.cmslearnenglish.dto.ProStatusResponse;
 import com.example.cmslearnenglish.dto.SepayWebhookPayload;
 import com.example.cmslearnenglish.entity.PaymentOrder;
 import com.example.cmslearnenglish.entity.enums.PaymentOrderStatus;
-import com.example.cmslearnenglish.entity.enums.ProPlan;
 import com.example.cmslearnenglish.entity.User;
 import com.example.cmslearnenglish.exception.ResourceNotFoundException;
 import com.example.cmslearnenglish.repository.PaymentOrderRepository;
@@ -16,6 +15,8 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
@@ -23,6 +24,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
+import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.UUID;
@@ -44,6 +46,7 @@ public class PaymentService {
     private final PaymentWebhookEventRepository webhookEventRepository;
     private final UserRepository userRepository;
     private final ObjectMapper objectMapper;
+    private final JdbcTemplate jdbcTemplate;
 
     @Value("${payment.order.expiry-minutes:30}")
     private long orderExpiryMinutes;
@@ -57,8 +60,9 @@ public class PaymentService {
     @Value("${payment.sepay.account-holder:}")
     private String accountHolder;
 
-    public PaymentOrderResponse createProOrder(Long userId, ProPlan plan) {
+    public PaymentOrderResponse createProOrder(Long userId, String planCode) {
         validatePaymentConfiguration();
+        ProPlanConfig plan = findPlanConfig(normalizePlanCode(planCode), true);
         User user = findUser(userId);
         Instant now = Instant.now();
         validateUpgradePlan(userId, user, plan, now);
@@ -66,7 +70,7 @@ public class PaymentService {
         Optional<PaymentOrder> currentOrder =
                 paymentOrderRepository.findFirstByUserIdAndPlanCodeAndStatusAndExpiresAtAfterOrderByCreatedAtDesc(
                         userId,
-                        plan,
+                        plan.code(),
                         PaymentOrderStatus.PENDING,
                         now
                 );
@@ -78,8 +82,8 @@ public class PaymentService {
                 .id(UUID.randomUUID())
                 .user(user)
                 .paymentCode(generatePaymentCode())
-                .amount(plan.getAmount())
-                .planCode(plan)
+                .amount(plan.amount())
+                .planCode(plan.code())
                 .status(PaymentOrderStatus.PENDING)
                 .expiresAt(now.plus(orderExpiryMinutes, ChronoUnit.MINUTES))
                 .createdAt(now)
@@ -89,7 +93,32 @@ public class PaymentService {
         return toResponse(paymentOrderRepository.save(order));
     }
 
-    private void validateUpgradePlan(Long userId, User user, ProPlan requestedPlan, Instant now) {
+    @Transactional(readOnly = true)
+    public List<ProPlanResponse> getProPlans() {
+        return jdbcTemplate.query("""
+                SELECT id, code, name, description, amount, duration_days, benefits, special_benefits,
+                       status, featured, sort_order, created_at, updated_at
+                FROM pro_plan_configs
+                WHERE status = 'ACTIVE'
+                ORDER BY sort_order ASC, id ASC
+                """, (rs, row) -> new ProPlanResponse(
+                rs.getLong("id"),
+                rs.getString("code"),
+                rs.getString("name"),
+                rs.getString("description"),
+                rs.getLong("amount"),
+                rs.getObject("duration_days", Integer.class),
+                rs.getString("benefits"),
+                rs.getString("special_benefits"),
+                rs.getString("status"),
+                rs.getBoolean("featured"),
+                rs.getInt("sort_order"),
+                rs.getTimestamp("created_at").toInstant(),
+                rs.getTimestamp("updated_at").toInstant()
+        ));
+    }
+
+    private void validateUpgradePlan(Long userId, User user, ProPlanConfig requestedPlan, Instant now) {
         if (!isProActive(user, now)) {
             return;
         }
@@ -98,8 +127,8 @@ public class PaymentService {
                 userId,
                 PaymentOrderStatus.PAID
         ).ifPresent(currentOrder -> {
-            ProPlan currentPlan = currentOrder.getPlanCode();
-            if (requestedPlan.getRank() <= currentPlan.getRank()) {
+            ProPlanConfig currentPlan = findPlanConfig(currentOrder.getPlanCode(), false);
+            if (currentPlan != null && requestedPlan.sortOrder() <= currentPlan.sortOrder()) {
                 throw new ResponseStatusException(
                         BAD_REQUEST,
                         "Please choose a higher PRO plan to upgrade"
@@ -132,7 +161,7 @@ public class PaymentService {
         return ProStatusResponse.builder()
                 .pro(isProActive(user, now))
                 .currentPlanCode(currentOrder.map(PaymentOrder::getPlanCode).orElse(null))
-                .currentPlanName(currentOrder.map(order -> order.getPlanCode().getDisplayName()).orElse(null))
+                .currentPlanName(currentOrder.map(order -> resolvePlanName(order.getPlanCode())).orElse(null))
                 .proStartsAt(user.getProStartsAt())
                 .proExpiresAt(user.getProExpiresAt())
                 .build();
@@ -179,7 +208,11 @@ public class PaymentService {
         Instant now = Instant.now();
         User user = userRepository.findByIdForUpdate(order.getUser().getId())
                 .orElseThrow(() -> new ResourceNotFoundException("User not found"));
-        ProPeriod period = activatePro(user, order.getPlanCode(), now);
+        ProPlanConfig plan = findPlanConfig(order.getPlanCode(), false);
+        if (plan == null) {
+            throw new ResponseStatusException(BAD_REQUEST, "Payment plan is no longer configured");
+        }
+        ProPeriod period = activatePro(user, plan, now);
 
         order.setStatus(PaymentOrderStatus.PAID);
         order.setPaidAt(now);
@@ -194,7 +227,7 @@ public class PaymentService {
         return PaymentOrderResponse.builder()
                 .orderId(order.getId())
                 .planCode(order.getPlanCode())
-                .planName(order.getPlanCode().getDisplayName())
+                .planName(resolvePlanName(order.getPlanCode()))
                 .amount(order.getAmount())
                 .currency("VND")
                 .status(order.getStatus())
@@ -214,13 +247,13 @@ public class PaymentService {
                 .build();
     }
 
-    private ProPeriod activatePro(User user, ProPlan plan, Instant now) {
+    private ProPeriod activatePro(User user, ProPlanConfig plan, Instant now) {
         Instant currentExpiry = user.getProExpiresAt();
         boolean currentlyActive = isProActive(user, now);
-        Instant grantedStartsAt = currentlyActive && !ProPlan.isLifetimeExpiry(currentExpiry)
+        Instant grantedStartsAt = currentlyActive && !isLifetimeExpiry(currentExpiry)
                 ? currentExpiry
                 : now;
-        Instant newExpiry = plan.calculateExpiry(currentExpiry, now);
+        Instant newExpiry = calculateExpiry(plan, currentExpiry, now);
 
         if (!currentlyActive || user.getProStartsAt() == null) {
             user.setProStartsAt(now);
@@ -228,6 +261,18 @@ public class PaymentService {
         user.setProExpiresAt(newExpiry);
 
         return new ProPeriod(grantedStartsAt, newExpiry);
+    }
+
+    private Instant calculateExpiry(ProPlanConfig plan, Instant currentExpiry, Instant now) {
+        if (plan.durationDays() == null || isLifetimeExpiry(currentExpiry)) {
+            return Instant.parse("9999-12-31T23:59:59Z");
+        }
+        Instant start = currentExpiry != null && currentExpiry.isAfter(now) ? currentExpiry : now;
+        return start.plus(plan.durationDays(), ChronoUnit.DAYS);
+    }
+
+    private boolean isLifetimeExpiry(Instant expiry) {
+        return expiry != null && !expiry.isBefore(Instant.parse("9999-12-31T23:59:59Z"));
     }
 
     private boolean isProActive(User user, Instant now) {
@@ -312,8 +357,65 @@ public class PaymentService {
         }
     }
 
+    private ProPlanConfig findPlanConfig(String code, boolean activeOnly) {
+        try {
+            String sql = """
+                    SELECT code, name, amount, duration_days, sort_order
+                    FROM pro_plan_configs
+                    WHERE code = ?
+                    """ + (activeOnly ? " AND status = 'ACTIVE'" : "");
+            return jdbcTemplate.queryForObject(sql, (rs, row) -> new ProPlanConfig(
+                    rs.getString("code"),
+                    rs.getString("name"),
+                    rs.getLong("amount"),
+                    rs.getObject("duration_days", Integer.class),
+                    rs.getInt("sort_order")
+            ), code);
+        } catch (EmptyResultDataAccessException exception) {
+            if (activeOnly) {
+                throw new ResponseStatusException(BAD_REQUEST, "Invalid or inactive PRO plan");
+            }
+            return null;
+        }
+    }
+
+    private String resolvePlanName(String code) {
+        ProPlanConfig plan = findPlanConfig(code, false);
+        return plan == null ? code : plan.name();
+    }
+
+    private String normalizePlanCode(String value) {
+        return value == null ? "" : value.trim().toUpperCase(Locale.ROOT);
+    }
+
     private User findUser(Long userId) {
         return userRepository.findById(userId)
                 .orElseThrow(() -> new ResourceNotFoundException("User not found with ID: " + userId));
+    }
+
+    public record ProPlanResponse(
+            Long id,
+            String code,
+            String name,
+            String description,
+            Long amount,
+            Integer durationDays,
+            String benefits,
+            String specialBenefits,
+            String status,
+            Boolean featured,
+            Integer sortOrder,
+            Instant createdAt,
+            Instant updatedAt
+    ) {
+    }
+
+    private record ProPlanConfig(
+            String code,
+            String name,
+            Long amount,
+            Integer durationDays,
+            Integer sortOrder
+    ) {
     }
 }

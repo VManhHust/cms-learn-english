@@ -1,7 +1,6 @@
 package com.example.cmslearnenglish.entity;
 
 import com.example.cmslearnenglish.entity.enums.PaymentOrderStatus;
-import com.example.cmslearnenglish.entity.enums.ProPlan;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -30,9 +29,8 @@ public class PaymentOrder {
     @Column(nullable = false)
     private Long amount;
 
-    @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)
-    private ProPlan planCode;
+    private String planCode;
 
     @Enumerated(EnumType.STRING)
     @Column(nullable = false, length = 20)

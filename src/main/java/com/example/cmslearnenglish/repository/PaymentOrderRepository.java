@@ -2,7 +2,6 @@ package com.example.cmslearnenglish.repository;
 
 import com.example.cmslearnenglish.entity.PaymentOrder;
 import com.example.cmslearnenglish.entity.enums.PaymentOrderStatus;
-import com.example.cmslearnenglish.entity.enums.ProPlan;
 import jakarta.persistence.LockModeType;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
@@ -19,7 +18,7 @@ public interface PaymentOrderRepository extends JpaRepository<PaymentOrder, UUID
 
     Optional<PaymentOrder> findFirstByUserIdAndPlanCodeAndStatusAndExpiresAtAfterOrderByCreatedAtDesc(
             Long userId,
-            ProPlan planCode,
+            String planCode,
             PaymentOrderStatus status,
             Instant now
     );
