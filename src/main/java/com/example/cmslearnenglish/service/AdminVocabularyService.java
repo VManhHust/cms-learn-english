@@ -12,6 +12,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.io.ByteArrayOutputStream;
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
@@ -33,6 +34,24 @@ import java.util.Locale;
 public class AdminVocabularyService {
 
     private static final int MAX_PAGE_SIZE = 100;
+    private static final String[] WORD_EXPORT_HEADERS = {
+            "Bộ thẻ",
+            "Nhóm (chủ đề)",
+            "Từ vựng",
+            "Từ loại",
+            "Nghĩa tiếng Việt",
+            "Định nghĩa tiếng Anh",
+            "Định nghĩa tiếng Việt",
+            "Câu ví dụ",
+            "Dịch câu ví dụ",
+            "Phiên âm Mỹ",
+            "Phiên âm Anh",
+            "Audio Mỹ",
+            "Audio Anh",
+            "Ảnh minh họa",
+            "Thứ tự"
+    };
+
     private final JdbcTemplate jdbcTemplate;
 
     @Transactional(readOnly = true)
@@ -241,6 +260,113 @@ public class AdminVocabularyService {
     public void deleteWord(Long id) {
         requireExists("vocabulary_word", "Vocabulary word", id);
         jdbcTemplate.update("DELETE FROM vocabulary_word WHERE id=?", id);
+    }
+
+    @Transactional(readOnly = true)
+    public byte[] exportWordsCsv(String query, Long topicId, Long deckId, String sort, String order) {
+        List<Object> args = new ArrayList<>();
+        String where = wordWhere(query, topicId, deckId, args);
+        String from = " FROM vocabulary_word w JOIN vocabulary_topic t ON t.id=w.topic_id JOIN vocabulary_deck d ON d.id=t.deck_id ";
+        List<WordResponse> words = jdbcTemplate.query("SELECT w.*, t.title topic_title, d.id deck_id, d.title deck_title" +
+                from + where + " ORDER BY " + wordSort(sort) + direction(order), this::mapWord, args.toArray());
+
+        StringBuilder csv = new StringBuilder("\uFEFF");
+        appendCsvRow(csv, List.of(WORD_EXPORT_HEADERS));
+
+        for (WordResponse word : words) {
+            appendCsvRow(csv, java.util.Arrays.asList(
+                    word.deckTitle(),
+                    word.topicTitle(),
+                    word.word(),
+                    word.partOfSpeech(),
+                    word.vietnameseTranslation(),
+                    word.englishDefinition(),
+                    word.vietnameseDefinition(),
+                    word.exampleSentence(),
+                    word.exampleSentenceVi(),
+                    word.ipaUs(),
+                    word.ipaUk(),
+                    word.audioUsUrl(),
+                    word.audioUkUrl(),
+                    word.imageUrl(),
+                    String.valueOf(word.sortOrder())
+            ));
+        }
+
+        return csv.toString().getBytes(StandardCharsets.UTF_8);
+    }
+
+    @Transactional(readOnly = true)
+    public byte[] exportWordsExcel(String query, Long topicId, Long deckId, String sort, String order) {
+        List<Object> args = new ArrayList<>();
+        String where = wordWhere(query, topicId, deckId, args);
+        String from = " FROM vocabulary_word w JOIN vocabulary_topic t ON t.id=w.topic_id JOIN vocabulary_deck d ON d.id=t.deck_id ";
+        List<WordResponse> words = jdbcTemplate.query("SELECT w.*, t.title topic_title, d.id deck_id, d.title deck_title" +
+                from + where + " ORDER BY " + wordSort(sort) + direction(order), this::mapWord, args.toArray());
+
+        try (org.apache.poi.xssf.usermodel.XSSFWorkbook workbook = new org.apache.poi.xssf.usermodel.XSSFWorkbook();
+             ByteArrayOutputStream outputStream = new ByteArrayOutputStream()) {
+            org.apache.poi.ss.usermodel.Sheet sheet = workbook.createSheet("Từ vựng");
+            org.apache.poi.ss.usermodel.Font headerFont = workbook.createFont();
+            headerFont.setBold(true);
+
+            org.apache.poi.ss.usermodel.CellStyle headerStyle = workbook.createCellStyle();
+            headerStyle.setFont(headerFont);
+
+            String[] headers = {
+                    "Bộ thẻ",
+                    "Nhóm (chủ đề)",
+                    "Từ vựng",
+                    "Từ loại",
+                    "Nghĩa tiếng Việt",
+                    "Định nghĩa tiếng Anh",
+                    "Định nghĩa tiếng Việt",
+                    "Câu ví dụ",
+                    "Dịch câu ví dụ",
+                    "Phiên âm Mỹ",
+                    "Phiên âm Anh",
+                    "Audio Mỹ",
+                    "Audio Anh",
+                    "Ảnh minh họa",
+                    "Thứ tự"
+            };
+
+            org.apache.poi.ss.usermodel.Row headerRow = sheet.createRow(0);
+            for (int i = 0; i < WORD_EXPORT_HEADERS.length; i++) {
+                org.apache.poi.ss.usermodel.Cell cell = headerRow.createCell(i);
+                cell.setCellValue(WORD_EXPORT_HEADERS[i]);
+                cell.setCellStyle(headerStyle);
+            }
+
+            for (int rowIndex = 0; rowIndex < words.size(); rowIndex++) {
+                WordResponse word = words.get(rowIndex);
+                org.apache.poi.ss.usermodel.Row row = sheet.createRow(rowIndex + 1);
+                setCell(row, 0, word.deckTitle());
+                setCell(row, 1, word.topicTitle());
+                setCell(row, 2, word.word());
+                setCell(row, 3, word.partOfSpeech());
+                setCell(row, 4, word.vietnameseTranslation());
+                setCell(row, 5, word.englishDefinition());
+                setCell(row, 6, word.vietnameseDefinition());
+                setCell(row, 7, word.exampleSentence());
+                setCell(row, 8, word.exampleSentenceVi());
+                setCell(row, 9, word.ipaUs());
+                setCell(row, 10, word.ipaUk());
+                setCell(row, 11, word.audioUsUrl());
+                setCell(row, 12, word.audioUkUrl());
+                setCell(row, 13, word.imageUrl());
+                row.createCell(14).setCellValue(word.sortOrder());
+            }
+
+            for (int i = 0; i < WORD_EXPORT_HEADERS.length; i++) {
+                sheet.autoSizeColumn(i);
+            }
+
+            workbook.write(outputStream);
+            return outputStream.toByteArray();
+        } catch (IOException exception) {
+            throw new IllegalStateException("Could not export vocabulary Excel file", exception);
+        }
     }
 
 
@@ -549,6 +675,27 @@ public class AdminVocabularyService {
     private void addSearch(List<Object> args, String query, int count) {
         String value = "%" + query.trim().toLowerCase(Locale.ROOT) + "%";
         for (int i = 0; i < count; i++) args.add(value);
+    }
+
+    private void appendCsvRow(StringBuilder csv, List<String> values) {
+        for (int i = 0; i < values.size(); i++) {
+            if (i > 0) {
+                csv.append(',');
+            }
+            csv.append(escapeCsv(values.get(i)));
+        }
+        csv.append("\r\n");
+    }
+
+    private String escapeCsv(String value) {
+        if (value == null) {
+            return "";
+        }
+        return "\"" + value.replace("\"", "\"\"") + "\"";
+    }
+
+    private void setCell(org.apache.poi.ss.usermodel.Row row, int index, String value) {
+        row.createCell(index).setCellValue(value == null ? "" : value);
     }
 
     private PageRequest pageRequest(int page, int size) {

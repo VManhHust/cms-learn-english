@@ -5,6 +5,7 @@ import com.example.cmslearnenglish.service.AdminVocabularyService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.data.domain.Page;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -25,6 +26,33 @@ public class AdminVocabularyController {
     public ImportResult importCsv(@RequestParam("file") MultipartFile file) {
         return service.importCsv(file);
     }
+
+    @GetMapping(value = "/words/export", produces = "text/csv")
+    public ResponseEntity<byte[]> exportWordsCsv(
+            @RequestParam(required=false) String q,
+            @RequestParam(required=false) Long topicId,
+            @RequestParam(required=false) Long deckId,
+            @RequestParam(defaultValue="id") String sort,
+            @RequestParam(defaultValue="DESC") String order) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"vocabulary-words.csv\"")
+                .contentType(MediaType.parseMediaType("text/csv; charset=UTF-8"))
+                .body(service.exportWordsCsv(q, topicId, deckId, sort, order));
+    }
+
+    @GetMapping(value = "/words/export-xlsx", produces = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    public ResponseEntity<byte[]> exportWordsExcel(
+            @RequestParam(required=false) String q,
+            @RequestParam(required=false) Long topicId,
+            @RequestParam(required=false) Long deckId,
+            @RequestParam(defaultValue="id") String sort,
+            @RequestParam(defaultValue="DESC") String order) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"vocabulary-words.xlsx\"")
+                .contentType(MediaType.parseMediaType("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"))
+                .body(service.exportWordsExcel(q, topicId, deckId, sort, order));
+    }
+
     @GetMapping("/decks")
     public Page<DeckResponse> decks(@RequestParam(defaultValue="0") int page, @RequestParam(defaultValue="25") int size,
             @RequestParam(defaultValue="id") String sort, @RequestParam(defaultValue="DESC") String order,
