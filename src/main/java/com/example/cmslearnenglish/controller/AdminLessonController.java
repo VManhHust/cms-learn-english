@@ -5,9 +5,12 @@ import com.example.cmslearnenglish.service.AdminLessonService;
 import com.example.cmslearnenglish.service.AdminTranscriptService;
 import com.example.cmslearnenglish.service.AdminTranscriptImportService;
 import lombok.RequiredArgsConstructor;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
 
@@ -80,6 +83,21 @@ public class AdminLessonController {
     @GetMapping("/{lessonId}/transcript")
     public ResponseEntity<List<ExerciseModuleDto>> getTranscript(@PathVariable Long lessonId) {
         return ResponseEntity.ok(adminTranscriptService.getTranscript(lessonId));
+    }
+
+    @PostMapping(value = "/{lessonId}/transcript/srt", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
+    public ResponseEntity<List<ExerciseModuleDto>> importTranscriptSrt(
+            @PathVariable Long lessonId,
+            @RequestParam("file") MultipartFile file) {
+        return ResponseEntity.ok(adminTranscriptService.importSrt(lessonId, file));
+    }
+
+    @GetMapping(value = "/{lessonId}/transcript/srt", produces = "application/x-subrip")
+    public ResponseEntity<byte[]> exportTranscriptSrt(@PathVariable Long lessonId) {
+        return ResponseEntity.ok()
+                .header(HttpHeaders.CONTENT_DISPOSITION, "attachment; filename=\"lesson-" + lessonId + "-bilingual.srt\"")
+                .contentType(MediaType.parseMediaType("application/x-subrip; charset=UTF-8"))
+                .body(adminTranscriptService.exportSrt(lessonId));
     }
 
     /** PUT /api/admin/lessons/{lessonId}/transcript - update existing segments in place */
